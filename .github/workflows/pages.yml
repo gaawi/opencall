@@ -24,13 +24,18 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Stage site
         run: |
           mkdir -p _site
           cp index.html app.css app.js _site/
-          # Ship the README too so the site has a fallback if visited at /README.md
           cp README.md _site/ 2>/dev/null || true
+          # Pull the submissions CSV from main (lives there, not on app branches).
+          git show origin/main:"Festival ADAR 2026_Submissions_2026-05-18.csv" \
+            > _site/submissions.csv 2>/dev/null || \
+            echo "no submissions.csv found on main; site will require manual upload"
 
       - uses: actions/configure-pages@v5
 

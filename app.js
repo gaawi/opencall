@@ -24,6 +24,51 @@ function init() {
   refreshHome();
   renderResults();
   showScreen('home');
+  if (!state.composers.length) tryAutoLoadServerCsv();
+}
+
+const AUTO_CSV_PATH = 'submissions.csv';
+
+async function tryAutoLoadServerCsv() {
+  try {
+    els.homeStatus.textContent = 'Buscando candidatos en el servidor…';
+    const res = await fetch(AUTO_CSV_PATH, { cache: 'no-store' });
+    if (!res.ok) throw new Error('no server csv');
+    const text = await res.text();
+    if (!text.trim()) throw new Error('empty csv');
+    const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+    const fields = parsed.meta.fields || Object.keys(parsed.data[0] || {});
+    if (!parsed.data.length) throw new Error('no rows');
+    autoImport(parsed.data, fields);
+  } catch (e) {
+    els.homeStatus.textContent = 'Carga un archivo CSV o Excel para empezar.';
+  }
+}
+
+function autoImport(rows, fields) {
+  const guess = guessNameColumns(fields);
+  const composers = [];
+  const seen = new Set();
+  rows.forEach((r, i) => {
+    const a = String(r[guess.name1] || '').trim();
+    const b = guess.name2 ? String(r[guess.name2] || '').trim() : '';
+    const name = (a + (b ? ' ' + b : '')).trim() || `Anónimo ${i + 1}`;
+    const { samples, extraPdfs } = detectSamples(r, fields);
+    if (!samples.length) return;
+    const subId = String(r['Submission ID'] || r['submission id'] || '').trim();
+    const id = subId ? 'sub_' + subId : stableId(name, samples[0].audio_url, i);
+    if (seen.has(id)) return;
+    seen.add(id);
+    composers.push({ id, name, samples, extra_pdfs: extraPdfs, raw: r });
+  });
+  if (!composers.length) {
+    els.homeStatus.textContent = 'Carga un archivo CSV o Excel para empezar.';
+    return;
+  }
+  state.composers = composers;
+  saveToStorage();
+  refreshHome();
+  renderResults();
 }
 
 function cacheEls() {
@@ -41,6 +86,7 @@ function cacheEls() {
   els.counters = document.getElementById('counters');
   els.startReview = document.getElementById('start-review');
   els.startMaybes = document.getElementById('start-maybes');
+  els.reloadServer = document.getElementById('reload-server');
   els.exportProgress = document.getElementById('export-progress');
   els.importProgress = document.getElementById('import-progress');
   els.resetProgress = document.getElementById('reset-progress');
@@ -74,6 +120,10 @@ function bindEvents() {
 
   els.startReview.addEventListener('click', () => startReview('normal'));
   els.startMaybes.addEventListener('click', () => startReview('maybe'));
+  els.reloadServer.addEventListener('click', () => {
+    if (!confirm('Recargar la lista desde el CSV del servidor. Las evaluaciones se conservan. ¿Continuar?')) return;
+    tryAutoLoadServerCsv();
+  });
   els.exportProgress.addEventListener('click', exportProgress);
   els.importProgress.addEventListener('change', importProgress);
   els.resetProgress.addEventListener('click', resetProgress);
