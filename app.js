@@ -1,0 +1,719 @@
+/* ADAR Composer in Residence — review app */
+
+const STORAGE_KEY = 'adar_composer_review_v2';
+const MAX_LISTEN_SEC = 120;
+
+const state = {
+  composers: [],       // [{id, name, samples:[{audio_url, pdf_url, note}], extra_pdfs:[], raw}]
+  evaluations: {},     // { composerId: [{verdict, ts, listenedSec, attempt}] }
+  mode: 'normal',      // 'normal' | 'maybe'
+  currentId: null,
+  currentSampleIdx: 0,
+  filter: 'all',
+  pendingMapping: null,
+};
+
+const els = {};
+
+document.addEventListener('DOMContentLoaded', init);
+
+function init() {
+  cacheEls();
+  loadFromStorage();
+  bindEvents();
+  refreshHome();
+  renderResults();
+  showScreen('home');
+}
+
+function cacheEls() {
+  els.fileInput = document.getElementById('file-input');
+  els.columnMapping = document.getElementById('column-mapping');
+  els.mapName1 = document.getElementById('map-name1');
+  els.mapName2 = document.getElementById('map-name2');
+  els.mapSwap = document.getElementById('map-swap');
+  els.mappingInfo = document.getElementById('mapping-info');
+  els.mappingPreview = document.getElementById('mapping-preview');
+  els.confirmMapping = document.getElementById('confirm-mapping');
+
+  els.homeStatus = document.getElementById('home-status');
+  els.homeActions = document.getElementById('home-actions');
+  els.counters = document.getElementById('counters');
+  els.startReview = document.getElementById('start-review');
+  els.startMaybes = document.getElementById('start-maybes');
+  els.exportProgress = document.getElementById('export-progress');
+  els.importProgress = document.getElementById('import-progress');
+  els.resetProgress = document.getElementById('reset-progress');
+
+  els.reviewProgress = document.getElementById('review-progress');
+  els.reviewMode = document.getElementById('review-mode');
+  els.anonId = document.getElementById('anon-id');
+  els.audio = document.getElementById('audio-el');
+  els.audioLoading = document.getElementById('audio-loading');
+  els.sampleNote = document.getElementById('sample-note');
+  els.timer = document.getElementById('timer');
+  els.sampleSwitch = document.getElementById('sample-switch');
+  els.skipNext = document.getElementById('skip-next');
+  els.openPdf = document.getElementById('open-pdf');
+  els.reviewEmpty = document.getElementById('review-empty');
+
+  els.totals = document.getElementById('totals');
+  els.resultsBody = document.querySelector('#results-table tbody');
+  els.exportJson = document.getElementById('export-json');
+  els.exportCsv = document.getElementById('export-csv');
+}
+
+function bindEvents() {
+  document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => showScreen(b.dataset.go)));
+
+  els.fileInput.addEventListener('change', onFilePicked);
+  els.confirmMapping.addEventListener('click', confirmMapping);
+  els.mapName1.addEventListener('change', updateMappingPreview);
+  els.mapName2.addEventListener('change', updateMappingPreview);
+  els.mapSwap.addEventListener('change', updateMappingPreview);
+
+  els.startReview.addEventListener('click', () => startReview('normal'));
+  els.startMaybes.addEventListener('click', () => startReview('maybe'));
+  els.exportProgress.addEventListener('click', exportProgress);
+  els.importProgress.addEventListener('change', importProgress);
+  els.resetProgress.addEventListener('click', resetProgress);
+
+  document.querySelectorAll('.verdict .btn').forEach(b =>
+    b.addEventListener('click', () => recordVerdict(b.dataset.verdict)));
+  els.skipNext.addEventListener('click', nextComposer);
+  els.openPdf.addEventListener('click', openCurrentPdf);
+
+  els.audio.addEventListener('canplaythrough', () => els.audioLoading.classList.add('hidden'));
+  els.audio.addEventListener('waiting', () => els.audioLoading.classList.remove('hidden'));
+  els.audio.addEventListener('playing', () => els.audioLoading.classList.add('hidden'));
+  els.audio.addEventListener('timeupdate', onAudioTime);
+  els.audio.addEventListener('play', onAudioPlay);
+  els.audio.addEventListener('pause', accumulateListen);
+  els.audio.addEventListener('ended', accumulateListen);
+
+  document.querySelectorAll('[data-filter]').forEach(b =>
+    b.addEventListener('click', () => { state.filter = b.dataset.filter; renderResults(); }));
+
+  els.exportJson.addEventListener('click', exportResultsJson);
+  els.exportCsv.addEventListener('click', exportResultsCsv);
+}
+
+/* ---------- Storage ---------- */
+
+function saveToStorage() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    composers: state.composers,
+    evaluations: state.evaluations,
+  }));
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    state.composers = data.composers || [];
+    state.evaluations = data.evaluations || {};
+  } catch (e) {
+    console.warn('No se pudo leer el progreso guardado:', e);
+  }
+}
+
+/* ---------- Importing ---------- */
+
+function onFilePicked(ev) {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (ext === 'csv') readCsv(file);
+  else if (ext === 'xlsx' || ext === 'xls') readExcel(file);
+  else alert('Formato no soportado. Usa CSV o Excel.');
+}
+
+function readCsv(file) {
+  Papa.parse(file, {
+    header: true,
+    skipEmptyLines: true,
+    complete: ({ data, meta }) => prepareMapping(data, meta.fields || Object.keys(data[0] || {})),
+    error: err => alert('Error leyendo CSV: ' + err.message),
+  });
+}
+
+function readExcel(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const wb = XLSX.read(e.target.result, { type: 'array' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    const fields = rows.length ? Object.keys(rows[0]) : [];
+    prepareMapping(rows, fields);
+  };
+  reader.onerror = () => alert('Error leyendo el archivo Excel.');
+  reader.readAsArrayBuffer(file);
+}
+
+function prepareMapping(rows, fields) {
+  if (!rows || !rows.length) { alert('El archivo está vacío.'); return; }
+  state.pendingMapping = { rows, fields };
+
+  const guess = guessNameColumns(fields);
+  fillSelect(els.mapName1, fields, guess.name1, false);
+  fillSelect(els.mapName2, ['(ninguna)'].concat(fields), guess.name2 || '(ninguna)', false);
+  els.mapSwap.checked = false;
+
+  const audioCount = countDetectedKind(rows, isAudioUrl);
+  const pdfCount = countDetectedKind(rows, isPdfUrl);
+  els.mappingInfo.innerHTML =
+    `Detectados <b>${rows.length}</b> filas con <b>${audioCount}</b> audios y <b>${pdfCount}</b> PDFs en total. ` +
+    `Selecciona qué columnas forman el nombre.`;
+
+  els.columnMapping.classList.remove('hidden');
+  els.homeStatus.textContent = `Detectadas ${rows.length} filas. Confirma el nombre.`;
+  updateMappingPreview();
+}
+
+function guessNameColumns(fields) {
+  const lower = fields.map(f => String(f).toLowerCase().trim());
+  function find(candidates, exclude = []) {
+    for (const p of candidates) {
+      const i = lower.findIndex((h, idx) => h.includes(p) && !exclude.includes(fields[idx]));
+      if (i !== -1) return fields[i];
+    }
+    return null;
+  }
+  // The ADAR Tally form has first name in "Read the guidelines" by accident;
+  // try a sensible default but let the user override.
+  const first = find(['first name', 'nombre', 'name'])
+    || find(['read the guidelines'])
+    || fields[0];
+  const last = find(['last name', 'apellido', 'surname'], [first]);
+  return { name1: first, name2: last };
+}
+
+function fillSelect(sel, options, selected, includeNone) {
+  sel.innerHTML = '';
+  for (const o of options) {
+    const opt = document.createElement('option');
+    opt.value = o; opt.textContent = o;
+    if (o === selected) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function updateMappingPreview() {
+  const { rows } = state.pendingMapping;
+  const sample = rows.slice(0, 3).map(r => buildNameFromMapping(r));
+  els.mappingPreview.innerHTML = sample.length
+    ? 'Ejemplo: <b>' + sample.map(escapeHtml).join('</b>, <b>') + '</b>'
+    : '';
+}
+
+function buildNameFromMapping(row) {
+  const n1 = els.mapName1.value;
+  const n2 = els.mapName2.value;
+  const a = String(row[n1] || '').trim();
+  const b = n2 && n2 !== '(ninguna)' ? String(row[n2] || '').trim() : '';
+  if (!a && !b) return '';
+  if (!b) return a;
+  return els.mapSwap.checked ? `${b}, ${a}` : `${a} ${b}`;
+}
+
+function countDetectedKind(rows, predicate) {
+  let n = 0;
+  for (const r of rows) for (const v of Object.values(r)) if (predicate(v)) n++;
+  return n;
+}
+
+function isUrl(s) {
+  return typeof s === 'string' && /^https?:\/\//i.test(s.trim());
+}
+function isAudioUrl(s) {
+  if (!isUrl(s)) return false;
+  return /\.(mp3|wav|m4a|aac|ogg|flac)(\?|#|$)/i.test(s);
+}
+function isPdfUrl(s) {
+  if (!isUrl(s)) return false;
+  return /\.pdf(\?|#|$)/i.test(s);
+}
+function isShortNote(s) {
+  if (typeof s !== 'string') return false;
+  const t = s.trim();
+  return t.length > 0 && t.length < 80 && !isUrl(t);
+}
+
+function detectSamples(row, fields) {
+  // Walk through the row columns in order. Each time we find an audio URL,
+  // we pair it with the nearest preceding PDF URL (within ~3 columns) and
+  // the nearest following short note (the bar/minute hint).
+  const audios = [];
+  const pdfs = [];
+  for (const f of fields) {
+    const v = row[f];
+    if (isAudioUrl(v)) audios.push({ field: f, url: v.trim() });
+    else if (isPdfUrl(v)) pdfs.push({ field: f, url: v.trim() });
+  }
+
+  const samples = [];
+  const usedPdfFields = new Set();
+  for (const a of audios) {
+    const idxA = fields.indexOf(a.field);
+    // Find closest PDF before this audio, not yet used
+    let bestPdf = null, bestDist = Infinity;
+    for (const p of pdfs) {
+      if (usedPdfFields.has(p.field)) continue;
+      const idxP = fields.indexOf(p.field);
+      if (idxP > idxA) continue;
+      const d = idxA - idxP;
+      if (d < bestDist) { bestDist = d; bestPdf = p; }
+    }
+    if (bestPdf) usedPdfFields.add(bestPdf.field);
+
+    // Look for a short note in the next 1-2 columns after the audio
+    let note = '';
+    for (let k = 1; k <= 2; k++) {
+      const f2 = fields[idxA + k];
+      if (!f2) break;
+      const v2 = row[f2];
+      if (isShortNote(v2)) { note = String(v2).trim(); break; }
+    }
+    samples.push({
+      audio_url: a.url,
+      pdf_url: bestPdf ? bestPdf.url : '',
+      note,
+    });
+  }
+  // Any leftover PDFs (no audio match) become extras
+  const extraPdfs = pdfs.filter(p => !usedPdfFields.has(p.field)).map(p => p.url);
+  return { samples, extraPdfs };
+}
+
+function confirmMapping() {
+  const { rows, fields } = state.pendingMapping;
+  const seen = new Set();
+  const composers = [];
+
+  rows.forEach((r, i) => {
+    const name = buildNameFromMapping(r) || `Anónimo ${i + 1}`;
+    const { samples, extraPdfs } = detectSamples(r, fields);
+    if (!samples.length) return; // skip rows without any audio
+    const subId = String(r['Submission ID'] || r['submission id'] || '').trim();
+    const id = subId ? 'sub_' + subId : stableId(name, samples[0].audio_url, i);
+    if (seen.has(id)) return;
+    seen.add(id);
+    composers.push({
+      id,
+      name,
+      samples,
+      extra_pdfs: extraPdfs,
+      raw: r,
+    });
+  });
+
+  if (!composers.length) {
+    alert('No se han detectado audios en este archivo. Comprueba que las columnas contienen URLs a archivos .mp3.');
+    return;
+  }
+
+  state.composers = composers;
+  state.pendingMapping = null;
+  els.columnMapping.classList.add('hidden');
+  els.fileInput.value = '';
+  saveToStorage();
+  refreshHome();
+  renderResults();
+}
+
+function stableId(name, audio, idx) {
+  const base = (String(name || '') + '|' + String(audio || '') + '|' + idx).toLowerCase();
+  let h = 0;
+  for (let i = 0; i < base.length; i++) h = ((h << 5) - h + base.charCodeAt(i)) | 0;
+  return 'c_' + (h >>> 0).toString(36);
+}
+
+/* ---------- Home ---------- */
+
+function refreshHome() {
+  const n = state.composers.length;
+  if (!n) {
+    els.homeActions.classList.add('hidden');
+    els.homeStatus.textContent = 'Carga un archivo CSV o Excel para empezar.';
+    return;
+  }
+  els.homeActions.classList.remove('hidden');
+  const status = computeStatusCounts();
+  els.homeStatus.textContent = `${n} candidatos cargados.`;
+  els.counters.innerHTML = `
+    <div class="cell"><div class="v">${n}</div><div class="l">Total</div></div>
+    <div class="cell"><div class="v">${status.pending}</div><div class="l">Sin revisar</div></div>
+    <div class="cell"><div class="v">${status.yes}</div><div class="l">Sí</div></div>
+    <div class="cell"><div class="v">${status.maybe}</div><div class="l">Maybe</div></div>
+  `;
+}
+
+function computeStatusCounts() {
+  const counts = { yes: 0, no: 0, maybe: 0, pending: 0 };
+  for (const c of state.composers) {
+    const s = currentStatus(c.id);
+    if (!s) counts.pending++; else counts[s]++;
+  }
+  return counts;
+}
+
+function currentStatus(id) {
+  const list = state.evaluations[id];
+  if (!list || !list.length) return null;
+  return list[list.length - 1].verdict;
+}
+
+function reviewCount(id) {
+  const list = state.evaluations[id];
+  return list ? list.length : 0;
+}
+
+function totalListened(id) {
+  const list = state.evaluations[id] || [];
+  return list.reduce((sum, e) => sum + (e.listenedSec || 0), 0);
+}
+
+/* ---------- Review flow ---------- */
+
+const listening = { startedAt: 0, accumulated: 0 };
+
+function startReview(mode) {
+  state.mode = mode;
+  els.reviewMode.textContent = mode === 'maybe' ? 'Modo: revisar maybes' : 'Modo: normal';
+  showScreen('review');
+  nextComposer();
+}
+
+function pickNextComposer() {
+  let pool;
+  if (state.mode === 'maybe') {
+    pool = state.composers.filter(c => currentStatus(c.id) === 'maybe');
+  } else {
+    pool = state.composers.filter(c => currentStatus(c.id) == null);
+  }
+  if (!pool.length) return null;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function nextComposer() {
+  resetListening();
+  const c = pickNextComposer();
+  if (!c) {
+    state.currentId = null;
+    showEmptyReview();
+    return;
+  }
+  state.currentId = c.id;
+  state.currentSampleIdx = 0;
+  els.reviewEmpty.classList.add('hidden');
+  els.anonId.textContent = '#' + c.id.replace(/^c_|^sub_/, '').toUpperCase().slice(0, 8);
+  updateProgress();
+  renderSampleSwitch();
+  loadSample(0);
+}
+
+function currentComposer() {
+  return state.composers.find(x => x.id === state.currentId) || null;
+}
+
+function renderSampleSwitch() {
+  const c = currentComposer();
+  els.sampleSwitch.innerHTML = '';
+  if (!c || c.samples.length <= 1) {
+    els.sampleSwitch.classList.add('hidden');
+    return;
+  }
+  els.sampleSwitch.classList.remove('hidden');
+  c.samples.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'btn pill-btn' + (i === state.currentSampleIdx ? ' active' : '');
+    b.textContent = `Muestra ${i + 1}`;
+    b.addEventListener('click', () => loadSample(i));
+    els.sampleSwitch.appendChild(b);
+  });
+}
+
+function loadSample(idx) {
+  const c = currentComposer();
+  if (!c) return;
+  if (idx < 0 || idx >= c.samples.length) return;
+  // Save any in-progress listen time before switching
+  accumulateListen();
+  state.currentSampleIdx = idx;
+  renderSampleSwitch();
+  const s = c.samples[idx];
+  els.sampleNote.textContent = s.note ? `Indicación del autor: ${s.note}` : '';
+  loadAudio(s.audio_url);
+}
+
+function loadAudio(url) {
+  els.audio.pause();
+  els.audioLoading.classList.remove('hidden');
+  els.audio.src = url;
+  els.audio.load();
+  updateTimerDisplay();
+}
+
+function updateProgress() {
+  let total, current;
+  if (state.mode === 'maybe') {
+    const initialMaybes = state.composers.filter(c => (state.evaluations[c.id] || []).some(e => e.verdict === 'maybe')).length;
+    const pendingMaybes = state.composers.filter(c => currentStatus(c.id) === 'maybe').length;
+    total = initialMaybes;
+    current = total - pendingMaybes + 1;
+  } else {
+    total = state.composers.length;
+    current = state.composers.filter(c => currentStatus(c.id)).length + 1;
+  }
+  els.reviewProgress.textContent = `Audio ${Math.min(current, total)} de ${total}`;
+}
+
+function showEmptyReview() {
+  els.reviewEmpty.classList.remove('hidden');
+  els.audio.pause();
+  els.audio.removeAttribute('src');
+  els.audio.load();
+  els.timer.textContent = '–';
+  els.anonId.textContent = '#–';
+  els.audioLoading.classList.add('hidden');
+  els.sampleSwitch.classList.add('hidden');
+  els.sampleNote.textContent = '';
+}
+
+function resetListening() {
+  listening.startedAt = 0;
+  listening.accumulated = 0;
+}
+
+function onAudioPlay() {
+  if (currentListenedSec() >= MAX_LISTEN_SEC) {
+    els.audio.pause();
+    return;
+  }
+  listening.startedAt = performance.now();
+}
+
+function accumulateListen() {
+  if (listening.startedAt) {
+    listening.accumulated += (performance.now() - listening.startedAt) / 1000;
+    listening.startedAt = 0;
+  }
+}
+
+function currentListenedSec() {
+  let total = listening.accumulated;
+  if (listening.startedAt) total += (performance.now() - listening.startedAt) / 1000;
+  return total;
+}
+
+function onAudioTime() {
+  updateTimerDisplay();
+  if (currentListenedSec() >= MAX_LISTEN_SEC) {
+    els.audio.pause();
+    accumulateListen();
+  }
+}
+
+function updateTimerDisplay() {
+  const remaining = Math.max(0, MAX_LISTEN_SEC - currentListenedSec());
+  els.timer.textContent = formatSec(remaining);
+  els.timer.classList.toggle('warn', remaining < 30 && remaining > 5);
+  els.timer.classList.toggle('over', remaining <= 5);
+}
+
+function formatSec(s) {
+  s = Math.max(0, Math.floor(s));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m + ':' + (r < 10 ? '0' : '') + r;
+}
+
+function recordVerdict(verdict) {
+  if (!state.currentId) return;
+  els.audio.pause();
+  accumulateListen();
+  const id = state.currentId;
+  const list = state.evaluations[id] || (state.evaluations[id] = []);
+  list.push({
+    verdict,
+    ts: new Date().toISOString(),
+    listenedSec: Math.round(currentListenedSec() * 10) / 10,
+    attempt: list.length === 0 ? 'first' : 'review',
+  });
+  saveToStorage();
+  refreshHome();
+  renderResults();
+  nextComposer();
+}
+
+function openCurrentPdf() {
+  const c = currentComposer();
+  if (!c) return;
+  const pdfs = c.samples.map(s => s.pdf_url).filter(Boolean).concat(c.extra_pdfs || []);
+  if (!pdfs.length) { alert('Este candidato no tiene PDF.'); return; }
+  if (pdfs.length === 1) { window.open(pdfs[0], '_blank', 'noopener'); return; }
+  // Open the PDF that corresponds to the current sample first, then others
+  const current = c.samples[state.currentSampleIdx]?.pdf_url;
+  const ordered = current ? [current, ...pdfs.filter(u => u !== current)] : pdfs;
+  ordered.forEach(u => window.open(u, '_blank', 'noopener'));
+}
+
+/* ---------- Results ---------- */
+
+function renderResults() {
+  const filter = state.filter || 'all';
+  const rows = state.composers
+    .map(c => ({
+      c,
+      status: currentStatus(c.id),
+      reviews: reviewCount(c.id),
+      listened: totalListened(c.id),
+    }))
+    .filter(r => {
+      if (filter === 'all') return true;
+      if (filter === 'pending') return !r.status;
+      return r.status === filter;
+    });
+
+  const counts = computeStatusCounts();
+  els.totals.innerHTML = `
+    <span>Total: <b>${state.composers.length}</b></span>
+    <span>Sí: <b>${counts.yes}</b></span>
+    <span>Maybe: <b>${counts.maybe}</b></span>
+    <span>No: <b>${counts.no}</b></span>
+    <span>Sin revisar: <b>${counts.pending}</b></span>
+  `;
+
+  els.resultsBody.innerHTML = rows.map((r, i) => {
+    const audios = r.c.samples.map((s, idx) =>
+      `<a href="${escapeAttr(s.audio_url)}" target="_blank" rel="noopener">audio ${idx + 1}</a>`).join(' · ');
+    const pdfs = r.c.samples.map((s, idx) => s.pdf_url
+      ? `<a href="${escapeAttr(s.pdf_url)}" target="_blank" rel="noopener">PDF ${idx + 1}</a>` : '').filter(Boolean)
+      .concat((r.c.extra_pdfs || []).map((u, k) => `<a href="${escapeAttr(u)}" target="_blank" rel="noopener">PDF extra ${k + 1}</a>`))
+      .join(' · ');
+    return `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${escapeHtml(r.c.name)}</td>
+        <td>${statusTag(r.status)}</td>
+        <td>${r.reviews}</td>
+        <td>${formatSec(r.listened)}</td>
+        <td>${audios || '—'}</td>
+        <td>${pdfs || '—'}</td>
+      </tr>`;
+  }).join('');
+}
+
+function statusTag(s) {
+  if (!s) return '<span class="tag pending">Sin revisar</span>';
+  const label = s === 'yes' ? 'Sí' : s === 'maybe' ? 'Maybe' : 'No';
+  return `<span class="tag ${s}">${label}</span>`;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function escapeAttr(s) { return escapeHtml(s); }
+
+/* ---------- Export / Import ---------- */
+
+function exportResultsJson() {
+  const data = state.composers.map(c => ({
+    id: c.id,
+    name: c.name,
+    samples: c.samples,
+    extra_pdfs: c.extra_pdfs || [],
+    status: currentStatus(c.id),
+    reviews: state.evaluations[c.id] || [],
+    total_listened_sec: totalListened(c.id),
+  }));
+  download('resultados.json', JSON.stringify(data, null, 2), 'application/json');
+}
+
+function exportResultsCsv() {
+  const rows = state.composers.map(c => {
+    const evals = state.evaluations[c.id] || [];
+    return {
+      id: c.id,
+      name: c.name,
+      status: currentStatus(c.id) || '',
+      reviews: evals.length,
+      total_listened_sec: totalListened(c.id),
+      last_ts: evals.slice(-1)[0]?.ts || '',
+      audio_1: c.samples[0]?.audio_url || '',
+      audio_2: c.samples[1]?.audio_url || '',
+      pdf_1: c.samples[0]?.pdf_url || '',
+      pdf_2: c.samples[1]?.pdf_url || '',
+    };
+  });
+  const csv = Papa.unparse(rows);
+  download('resultados.csv', csv, 'text/csv');
+}
+
+function exportProgress() {
+  const blob = {
+    composers: state.composers,
+    evaluations: state.evaluations,
+    exported_at: new Date().toISOString(),
+  };
+  download('progreso.json', JSON.stringify(blob, null, 2), 'application/json');
+}
+
+function importProgress(ev) {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!data.composers || !data.evaluations) throw new Error('Estructura inválida');
+      if (!confirm('Esto sobrescribirá el progreso actual. ¿Continuar?')) return;
+      state.composers = data.composers;
+      state.evaluations = data.evaluations;
+      saveToStorage();
+      refreshHome();
+      renderResults();
+      alert('Progreso importado.');
+    } catch (e) {
+      alert('Archivo inválido: ' + e.message);
+    }
+  };
+  reader.readAsText(file);
+  ev.target.value = '';
+}
+
+function resetProgress() {
+  if (!confirm('¿Borrar TODOS los candidatos y evaluaciones? Esta acción no se puede deshacer.')) return;
+  state.composers = [];
+  state.evaluations = {};
+  saveToStorage();
+  refreshHome();
+  renderResults();
+}
+
+function download(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ---------- Navigation ---------- */
+
+function showScreen(name) {
+  for (const id of ['home', 'review', 'results']) {
+    document.getElementById('screen-' + id).classList.toggle('hidden', id !== name);
+  }
+  if (name === 'home') refreshHome();
+  if (name === 'results') renderResults();
+  if (name !== 'review') {
+    els.audio.pause();
+    accumulateListen();
+  }
+}

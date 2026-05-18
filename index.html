@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111111" />
+  <title>ADAR · Composer in Residence</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">ADAR · Composer in Residence</div>
+    <nav class="nav">
+      <button class="nav-btn" data-go="home">Inicio</button>
+      <button class="nav-btn" data-go="results">Resultados</button>
+    </nav>
+  </header>
+
+  <main id="app">
+
+    <!-- HOME -->
+    <section class="screen" id="screen-home">
+      <div class="card">
+        <h1>Revisión de candidatos</h1>
+        <p class="muted" id="home-status">Carga un archivo CSV o Excel para empezar.</p>
+
+        <div class="stack">
+          <label class="file-input">
+            <input type="file" id="file-input" accept=".csv,.xlsx,.xls" />
+            <span>Importar CSV o Excel</span>
+          </label>
+
+          <div id="column-mapping" class="hidden">
+            <h3>Columnas detectadas</h3>
+            <p class="muted small" id="mapping-info">
+              Los audios y PDFs se detectan automáticamente por el contenido
+              de las celdas (URLs con <code>.mp3</code> / <code>.pdf</code>).
+              Sólo necesitas indicar qué columnas forman el nombre.
+            </p>
+            <div class="row">
+              <label>Nombre 1 <select id="map-name1"></select></label>
+              <label>Nombre 2 (opcional) <select id="map-name2"></select></label>
+            </div>
+            <div class="row">
+              <label class="checkbox-label">
+                <input type="checkbox" id="map-swap" />
+                Invertir orden (Apellido, Nombre)
+              </label>
+            </div>
+            <div class="muted small" id="mapping-preview"></div>
+            <button id="confirm-mapping" class="btn primary">Confirmar e importar</button>
+          </div>
+
+          <div id="home-actions" class="stack hidden">
+            <div class="counters" id="counters"></div>
+            <button id="start-review" class="btn primary big">Empezar revisión</button>
+            <button id="start-maybes" class="btn ghost">Revisar maybes</button>
+            <details class="advanced">
+              <summary>Avanzado</summary>
+              <div class="stack">
+                <button id="export-progress" class="btn">Exportar progreso (JSON)</button>
+                <label class="file-input small">
+                  <input type="file" id="import-progress" accept=".json" />
+                  <span>Importar progreso (JSON)</span>
+                </label>
+                <button id="reset-progress" class="btn danger">Borrar progreso</button>
+              </div>
+            </details>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- REVIEW -->
+    <section class="screen hidden" id="screen-review">
+      <div class="card review-card">
+        <div class="review-header">
+          <span class="pill" id="review-progress">Audio 0 de 0</span>
+          <span class="pill" id="review-mode">Modo: normal</span>
+        </div>
+
+        <div class="anon-block">
+          <div class="anon-id" id="anon-id">#–</div>
+          <div class="anon-label">Candidato anónimo</div>
+        </div>
+
+        <div class="loading" id="audio-loading">Cargando audio…</div>
+
+        <audio id="audio-el" controls preload="auto" controlsList="nodownload"></audio>
+
+        <div class="sample-note muted small" id="sample-note"></div>
+
+        <div class="timer" id="timer">2:00</div>
+
+        <div class="sample-switch hidden" id="sample-switch"></div>
+
+        <div class="verdict">
+          <button class="btn yes" data-verdict="yes">Sí</button>
+          <button class="btn maybe" data-verdict="maybe">Maybe</button>
+          <button class="btn no" data-verdict="no">No</button>
+        </div>
+
+        <div class="row secondary">
+          <button id="open-pdf" class="btn ghost">Ver PDF</button>
+          <button id="skip-next" class="btn ghost">Siguiente</button>
+        </div>
+
+        <div id="review-empty" class="empty hidden">
+          <p>No quedan candidatos en este modo.</p>
+          <button class="btn" data-go="home">Volver</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- RESULTS -->
+    <section class="screen hidden" id="screen-results">
+      <div class="card">
+        <h1>Resultados</h1>
+        <div class="row">
+          <button class="btn" data-filter="all">Todos</button>
+          <button class="btn yes" data-filter="yes">Finalistas (Sí)</button>
+          <button class="btn maybe" data-filter="maybe">Maybes pendientes</button>
+          <button class="btn no" data-filter="no">No</button>
+          <button class="btn ghost" data-filter="pending">Sin revisar</button>
+        </div>
+        <div class="row">
+          <button id="export-json" class="btn">Exportar JSON</button>
+          <button id="export-csv" class="btn">Exportar CSV</button>
+        </div>
+        <div class="totals" id="totals"></div>
+        <div class="table-wrap">
+          <table id="results-table">
+            <thead>
+              <tr>
+                <th>#</th><th>Nombre</th><th>Estado</th><th>Revisiones</th>
+                <th>Escuchado</th><th>Audio</th><th>PDF</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
