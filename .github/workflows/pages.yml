@@ -32,10 +32,33 @@ jobs:
           mkdir -p _site
           cp index.html app.css app.js _site/
           cp README.md _site/ 2>/dev/null || true
-          # Pull the submissions CSV from main (lives there, not on app branches).
+
+      - name: Sanitize submissions CSV from main
+        run: |
           git show origin/main:"Festival ADAR 2026_Submissions_2026-05-18.csv" \
-            > _site/submissions.csv 2>/dev/null || \
-            echo "no submissions.csv found on main; site will require manual upload"
+            > /tmp/raw.csv 2>/dev/null \
+            || { echo "no submissions.csv found on main; skipping"; exit 0; }
+          python3 - <<'PY'
+          import csv
+          # Columns whose names match any of these (case-insensitive) are dropped.
+          DROP_SUBSTRINGS = [
+              "email", "phone", "website", "tell us about", "admin fee",
+              "submission pdf", "submission preview", "respondent id",
+              "submitted at", "untitled multiple choice", "untitled long answer",
+          ]
+          def should_drop(col):
+              c = col.lower()
+              return any(s in c for s in DROP_SUBSTRINGS)
+          with open("/tmp/raw.csv", newline="", encoding="utf-8-sig") as f, \
+               open("_site/submissions.csv", "w", newline="", encoding="utf-8") as out:
+              r = csv.DictReader(f)
+              kept = [h for h in r.fieldnames if not should_drop(h)]
+              w = csv.DictWriter(out, fieldnames=kept)
+              w.writeheader()
+              for row in r:
+                  w.writerow({k: row.get(k, "") for k in kept})
+          print("Sanitized:", len(kept), "columns kept of", len(r.fieldnames))
+          PY
 
       - uses: actions/configure-pages@v5
 
