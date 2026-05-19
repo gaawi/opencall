@@ -86,14 +86,34 @@
         </div>
 
         <div class="player-wrap">
-          <div class="sample-note muted" id="sample-note"></div>
-          <div class="loading" id="audio-loading">Cargando audio…</div>
-          <audio id="audio-el" controls preload="auto" controlsList="nodownload"></audio>
-          <div class="seek-row">
+          <div class="sample-note" id="sample-note"></div>
+          <audio id="audio-el" preload="auto"></audio>
+          <div class="audio-loading" id="audio-loading">Cargando audio…</div>
+
+          <div class="player-main">
+            <button class="play-btn" id="play-btn" type="button" aria-label="Reproducir">
+              <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+              <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+            </button>
+            <div class="player-progress">
+              <div class="progress-bar" id="progress-bar" role="slider"
+                   aria-label="Posición del audio" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-fill" id="progress-fill"></div>
+                <div class="progress-thumb" id="progress-thumb"></div>
+              </div>
+              <div class="time-row">
+                <span class="t" id="time-elapsed">0:00</span>
+                <span class="t muted" id="time-total">--:--</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="timer-row">
             <button class="seek-btn" id="seek-back" type="button" aria-label="Retroceder 10 segundos">−10s</button>
             <div class="timer" id="timer">2:00</div>
             <button class="seek-btn" id="seek-fwd" type="button" aria-label="Avanzar 10 segundos">+10s</button>
           </div>
+
           <div class="sample-switch hidden" id="sample-switch"></div>
         </div>
 

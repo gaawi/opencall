@@ -96,6 +96,12 @@ function cacheEls() {
   els.anonId = document.getElementById('anon-id');
   els.audio = document.getElementById('audio-el');
   els.audioLoading = document.getElementById('audio-loading');
+  els.playBtn = document.getElementById('play-btn');
+  els.progressBar = document.getElementById('progress-bar');
+  els.progressFill = document.getElementById('progress-fill');
+  els.progressThumb = document.getElementById('progress-thumb');
+  els.timeElapsed = document.getElementById('time-elapsed');
+  els.timeTotal = document.getElementById('time-total');
   els.seekBack = document.getElementById('seek-back');
   els.seekFwd = document.getElementById('seek-fwd');
   els.sampleNote = document.getElementById('sample-note');
@@ -137,16 +143,19 @@ function bindEvents() {
 
   els.audio.addEventListener('canplaythrough', () => els.audioLoading.classList.add('hidden'));
   els.audio.addEventListener('canplay', () => els.audioLoading.classList.add('hidden'));
-  els.audio.addEventListener('loadedmetadata', () => els.audioLoading.classList.add('hidden'));
+  els.audio.addEventListener('loadedmetadata', onLoadedMetadata);
+  els.audio.addEventListener('durationchange', onLoadedMetadata);
   els.audio.addEventListener('waiting', () => els.audioLoading.classList.remove('hidden'));
   els.audio.addEventListener('playing', () => els.audioLoading.classList.add('hidden'));
   els.audio.addEventListener('timeupdate', onAudioTime);
   els.audio.addEventListener('play', onAudioPlay);
-  els.audio.addEventListener('pause', accumulateListen);
-  els.audio.addEventListener('ended', accumulateListen);
+  els.audio.addEventListener('pause', onAudioPause);
+  els.audio.addEventListener('ended', () => { accumulateListen(); setPlayingUi(false); });
 
+  els.playBtn.addEventListener('click', togglePlay);
   els.seekBack.addEventListener('click', () => seekRelative(-10));
   els.seekFwd.addEventListener('click', () => seekRelative(10));
+  setupScrubber();
 
   document.querySelectorAll('[data-filter]').forEach(b =>
     b.addEventListener('click', () => { state.filter = b.dataset.filter; renderResults(); }));
@@ -509,8 +518,13 @@ let _lastBlobUrl = null;
 
 async function loadAudio(url) {
   els.audio.pause();
+  setPlayingUi(false);
   els.audioLoading.textContent = 'Cargando audio…';
   els.audioLoading.classList.remove('hidden');
+  els.timeElapsed.textContent = '0:00';
+  els.timeTotal.textContent = '--:--';
+  els.progressFill.style.width = '0%';
+  els.progressThumb.style.left = '0%';
   if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
   els.audio.removeAttribute('src');
   els.audio.load();
@@ -542,6 +556,83 @@ function seekRelative(delta) {
   if (!isFinite(els.audio.duration) || els.audio.duration <= 0) return;
   const t = Math.min(Math.max(0, els.audio.currentTime + delta), els.audio.duration);
   els.audio.currentTime = t;
+  updateProgressUi();
+}
+
+function togglePlay() {
+  if (els.audio.paused) {
+    els.audio.play().catch(err => console.warn('play() bloqueado:', err));
+  } else {
+    els.audio.pause();
+  }
+}
+
+function onAudioPause() {
+  accumulateListen();
+  setPlayingUi(false);
+}
+
+function setPlayingUi(playing) {
+  els.playBtn.classList.toggle('playing', playing);
+  els.playBtn.setAttribute('aria-label', playing ? 'Pausar' : 'Reproducir');
+}
+
+function onLoadedMetadata() {
+  const d = els.audio.duration;
+  els.timeTotal.textContent = isFinite(d) && d > 0 ? formatSec(d) : '--:--';
+  updateProgressUi();
+  els.audioLoading.classList.add('hidden');
+}
+
+function updateProgressUi() {
+  const d = els.audio.duration;
+  const t = els.audio.currentTime || 0;
+  const ratio = (isFinite(d) && d > 0) ? Math.min(1, Math.max(0, t / d)) : 0;
+  const pct = (ratio * 100).toFixed(2) + '%';
+  els.progressFill.style.width = pct;
+  els.progressThumb.style.left = pct;
+  els.progressBar.setAttribute('aria-valuenow', String(Math.round(ratio * 100)));
+  els.timeElapsed.textContent = formatSec(t);
+}
+
+function setupScrubber() {
+  const bar = els.progressBar;
+  let dragging = false;
+  let wasPlaying = false;
+
+  function ratioFromEvent(e) {
+    const rect = bar.getBoundingClientRect();
+    const clientX = e.clientX != null ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+    return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  }
+
+  function seekTo(ratio) {
+    const d = els.audio.duration;
+    if (!isFinite(d) || d <= 0) return;
+    els.audio.currentTime = ratio * d;
+    updateProgressUi();
+  }
+
+  bar.addEventListener('pointerdown', e => {
+    if (!isFinite(els.audio.duration) || els.audio.duration <= 0) return;
+    dragging = true;
+    wasPlaying = !els.audio.paused;
+    if (wasPlaying) els.audio.pause();
+    bar.setPointerCapture(e.pointerId);
+    seekTo(ratioFromEvent(e));
+    e.preventDefault();
+  });
+  bar.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    seekTo(ratioFromEvent(e));
+  });
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    if (wasPlaying) els.audio.play().catch(() => {});
+  }
+  bar.addEventListener('pointerup', endDrag);
+  bar.addEventListener('pointercancel', endDrag);
 }
 
 function updateProgress() {
@@ -561,6 +652,7 @@ function updateProgress() {
 function showEmptyReview() {
   els.reviewEmpty.classList.remove('hidden');
   els.audio.pause();
+  setPlayingUi(false);
   els.audio.removeAttribute('src');
   els.audio.load();
   els.timer.textContent = '–';
@@ -568,6 +660,10 @@ function showEmptyReview() {
   els.audioLoading.classList.add('hidden');
   els.sampleSwitch.classList.add('hidden');
   els.sampleNote.textContent = '';
+  els.timeElapsed.textContent = '0:00';
+  els.timeTotal.textContent = '--:--';
+  els.progressFill.style.width = '0%';
+  els.progressThumb.style.left = '0%';
 }
 
 function resetListening() {
@@ -581,6 +677,7 @@ function onAudioPlay() {
     return;
   }
   listening.startedAt = performance.now();
+  setPlayingUi(true);
 }
 
 function accumulateListen() {
@@ -598,6 +695,7 @@ function currentListenedSec() {
 
 function onAudioTime() {
   updateTimerDisplay();
+  updateProgressUi();
   if (currentListenedSec() >= MAX_LISTEN_SEC) {
     els.audio.pause();
     accumulateListen();
