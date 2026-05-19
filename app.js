@@ -96,6 +96,8 @@ function cacheEls() {
   els.anonId = document.getElementById('anon-id');
   els.audio = document.getElementById('audio-el');
   els.audioLoading = document.getElementById('audio-loading');
+  els.seekBack = document.getElementById('seek-back');
+  els.seekFwd = document.getElementById('seek-fwd');
   els.sampleNote = document.getElementById('sample-note');
   els.timer = document.getElementById('timer');
   els.sampleSwitch = document.getElementById('sample-switch');
@@ -134,12 +136,17 @@ function bindEvents() {
   els.openPdf.addEventListener('click', openCurrentPdf);
 
   els.audio.addEventListener('canplaythrough', () => els.audioLoading.classList.add('hidden'));
+  els.audio.addEventListener('canplay', () => els.audioLoading.classList.add('hidden'));
+  els.audio.addEventListener('loadedmetadata', () => els.audioLoading.classList.add('hidden'));
   els.audio.addEventListener('waiting', () => els.audioLoading.classList.remove('hidden'));
   els.audio.addEventListener('playing', () => els.audioLoading.classList.add('hidden'));
   els.audio.addEventListener('timeupdate', onAudioTime);
   els.audio.addEventListener('play', onAudioPlay);
   els.audio.addEventListener('pause', accumulateListen);
   els.audio.addEventListener('ended', accumulateListen);
+
+  els.seekBack.addEventListener('click', () => seekRelative(-10));
+  els.seekFwd.addEventListener('click', () => seekRelative(10));
 
   document.querySelectorAll('[data-filter]').forEach(b =>
     b.addEventListener('click', () => { state.filter = b.dataset.filter; renderResults(); }));
@@ -498,12 +505,43 @@ function loadSample(idx) {
   loadAudio(s.audio_url);
 }
 
-function loadAudio(url) {
+let _lastBlobUrl = null;
+
+async function loadAudio(url) {
   els.audio.pause();
+  els.audioLoading.textContent = 'Cargando audio…';
   els.audioLoading.classList.remove('hidden');
-  els.audio.src = url;
+  if (_lastBlobUrl) { URL.revokeObjectURL(_lastBlobUrl); _lastBlobUrl = null; }
+  els.audio.removeAttribute('src');
   els.audio.load();
   updateTimerDisplay();
+
+  // iOS WebKit shows "Live Broadcast" and disables scrubbing when the server
+  // doesn't expose Content-Length. Fetching as a Blob gives the element a
+  // fully-known resource so the scrubber works. Falls back to direct URL if
+  // CORS blocks the fetch.
+  const loadId = ++loadAudio._token;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    if (loadId !== loadAudio._token) return; // superseded
+    _lastBlobUrl = URL.createObjectURL(blob);
+    els.audio.src = _lastBlobUrl;
+    els.audio.load();
+  } catch (e) {
+    if (loadId !== loadAudio._token) return;
+    console.warn('Blob fetch falló, uso URL directa:', e);
+    els.audio.src = url;
+    els.audio.load();
+  }
+}
+loadAudio._token = 0;
+
+function seekRelative(delta) {
+  if (!isFinite(els.audio.duration) || els.audio.duration <= 0) return;
+  const t = Math.min(Math.max(0, els.audio.currentTime + delta), els.audio.duration);
+  els.audio.currentTime = t;
 }
 
 function updateProgress() {

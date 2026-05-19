@@ -198,26 +198,61 @@ code {
   margin-top: 2px;
 }
 
+.player-wrap {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .loading {
   text-align: center;
   color: var(--muted);
-  padding: 8px;
-  font-size: 14px;
+  padding: 4px;
+  font-size: 13px;
+  min-height: 18px;
 }
 
 audio {
   width: 100%;
   outline: none;
+  min-height: 44px;
+  border-radius: 10px;
 }
+
+.seek-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.seek-btn {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  min-width: 60px;
+}
+.seek-btn:active { transform: scale(0.97); }
+.seek-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .timer {
   text-align: center;
   font-size: 44px;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   font-weight: 700;
   color: var(--text);
-  padding: 4px 0 0;
+  margin: 0;
 }
 .timer.warn { color: var(--maybe); }
 .timer.over { color: var(--no); }
@@ -225,6 +260,8 @@ audio {
 .sample-note {
   text-align: center;
   min-height: 1.2em;
+  font-size: 13px;
+  color: var(--muted);
 }
 
 .sample-switch {
@@ -332,8 +369,15 @@ details.advanced summary {
 }
 
 @media (max-width: 520px) {
+  #app { padding: 12px 12px 60px; }
+  .card { padding: 16px; }
+  .review-card { gap: 14px; }
   .counters { grid-template-columns: repeat(2, 1fr); }
-  .timer { font-size: 36px; }
+  .timer { font-size: 40px; }
   h1 { font-size: 20px; }
-  .verdict .btn { padding: 16px 6px; font-size: 16px; }
+  .verdict .btn { padding: 18px 4px; font-size: 17px; }
+  .seek-btn { padding: 10px 10px; min-width: 54px; font-size: 13px; }
+  .anon-id { font-size: 24px; }
+  .player-wrap { padding: 12px; gap: 10px; }
+  .row.secondary .btn { flex: 1; }
 }

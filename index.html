@@ -85,15 +85,17 @@
           <div class="anon-label">Candidato anónimo</div>
         </div>
 
-        <div class="loading" id="audio-loading">Cargando audio…</div>
-
-        <audio id="audio-el" controls preload="auto" controlsList="nodownload"></audio>
-
-        <div class="sample-note muted small" id="sample-note"></div>
-
-        <div class="timer" id="timer">2:00</div>
-
-        <div class="sample-switch hidden" id="sample-switch"></div>
+        <div class="player-wrap">
+          <div class="sample-note muted" id="sample-note"></div>
+          <div class="loading" id="audio-loading">Cargando audio…</div>
+          <audio id="audio-el" controls preload="auto" controlsList="nodownload"></audio>
+          <div class="seek-row">
+            <button class="seek-btn" id="seek-back" type="button" aria-label="Retroceder 10 segundos">−10s</button>
+            <div class="timer" id="timer">2:00</div>
+            <button class="seek-btn" id="seek-fwd" type="button" aria-label="Avanzar 10 segundos">+10s</button>
+          </div>
+          <div class="sample-switch hidden" id="sample-switch"></div>
+        </div>
 
         <div class="verdict">
           <button class="btn yes" data-verdict="yes">Sí</button>
