@@ -115,6 +115,10 @@ function cacheEls() {
   els.resultsBody = document.querySelector('#results-table tbody');
   els.exportJson = document.getElementById('export-json');
   els.exportCsv = document.getElementById('export-csv');
+
+  els.finalistsList = document.getElementById('finalists-list');
+  els.finalistsSummary = document.getElementById('finalists-summary');
+  els.finalistsEmpty = document.getElementById('finalists-empty');
 }
 
 function bindEvents() {
@@ -159,6 +163,9 @@ function bindEvents() {
 
   document.querySelectorAll('[data-filter]').forEach(b =>
     b.addEventListener('click', () => { state.filter = b.dataset.filter; renderResults(); }));
+
+  document.querySelectorAll('[data-fin-filter]').forEach(b =>
+    b.addEventListener('click', () => { state.finalistsFilter = b.dataset.finFilter; renderFinalists(); }));
 
   els.exportJson.addEventListener('click', exportResultsJson);
   els.exportCsv.addEventListener('click', exportResultsCsv);
@@ -746,6 +753,282 @@ function openCurrentPdf() {
   ordered.forEach(u => window.open(u, '_blank', 'noopener'));
 }
 
+/* ---------- Finalists ---------- */
+
+const FINALIST_FIELDS = {
+  email:   ['email'],
+  phone:   ['phone number', 'phone', 'teléfono'],
+  website: ['website', 'web', 'url'],
+  type:    ['option ', 'multiple choice', 'tipo'],
+  bio:     ['tell us about', 'about yourself', 'bio'],
+  why:     ['long answer', 'why', 'por qué', 'porque'],
+};
+
+function rawGet(raw, keys) {
+  if (!raw) return '';
+  for (const target of keys) {
+    for (const [k, v] of Object.entries(raw)) {
+      if (k.toLowerCase().includes(target) && typeof v === 'string' && v.trim()) {
+        return v.trim();
+      }
+    }
+  }
+  return '';
+}
+
+function renderFinalists() {
+  const filter = state.finalistsFilter || 'yes';
+  document.querySelectorAll('[data-fin-filter]').forEach(b => {
+    b.classList.toggle('active', b.dataset.finFilter === filter);
+  });
+
+  const list = state.composers
+    .map(c => ({ c, status: currentStatus(c.id), reviews: state.evaluations[c.id] || [] }))
+    .filter(r => {
+      if (filter === 'reviewed') return !!r.status;
+      return r.status === filter;
+    })
+    .sort((a, b) => {
+      const at = (a.reviews.slice(-1)[0] || {}).ts || '';
+      const bt = (b.reviews.slice(-1)[0] || {}).ts || '';
+      return bt.localeCompare(at);
+    });
+
+  els.finalistsSummary.textContent =
+    `${list.length} candidato${list.length === 1 ? '' : 's'}` +
+    (filter === 'yes' ? ' marcado(s) como Sí.' :
+     filter === 'maybe' ? ' marcado(s) como Maybe.' :
+     ' revisado(s) en total.');
+
+  els.finalistsEmpty.classList.toggle('hidden', list.length > 0);
+  els.finalistsList.innerHTML = '';
+  list.forEach(({ c, status, reviews }) => {
+    els.finalistsList.appendChild(buildFinalistCard(c, status, reviews));
+  });
+}
+
+function buildFinalistCard(c, status, reviews) {
+  const card = document.createElement('div');
+  card.className = 'finalist-card';
+  card.dataset.composerId = c.id;
+
+  const raw = c.raw || {};
+  const email = rawGet(raw, FINALIST_FIELDS.email);
+  const phone = rawGet(raw, FINALIST_FIELDS.phone);
+  const website = rawGet(raw, FINALIST_FIELDS.website);
+  const type = rawGet(raw, FINALIST_FIELDS.type);
+  const bio = rawGet(raw, FINALIST_FIELDS.bio);
+  const why = rawGet(raw, FINALIST_FIELDS.why);
+
+  const contactRows = [];
+  if (email) contactRows.push(`<div><span class="label">Email</span><a href="mailto:${escapeAttr(email)}">${escapeHtml(email)}</a></div>`);
+  if (phone) contactRows.push(`<div><span class="label">Tel</span><a href="tel:${escapeAttr(phone.replace(/\s/g, ''))}">${escapeHtml(phone)}</a></div>`);
+  if (website) {
+    const url = /^https?:/i.test(website) ? website : 'https://' + website.replace(/^\/*/, '');
+    contactRows.push(`<div><span class="label">Web</span><a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(website)}</a></div>`);
+  }
+
+  const sections = [];
+  if (type) sections.push(`<div class="fc-section"><h4>Tipo de residencia</h4><div class="body">${escapeHtml(type)}</div></div>`);
+  if (bio) sections.push(`<details class="fc-expand fc-section"><summary>Sobre el compositor</summary><div class="body">${escapeHtml(bio)}</div></details>`);
+  if (why) sections.push(`<details class="fc-expand fc-section"><summary>Por qué quiere la residencia</summary><div class="body">${escapeHtml(why)}</div></details>`);
+
+  const historyRows = reviews.slice().reverse().map(e => {
+    const when = new Date(e.ts);
+    const fmt = isNaN(when) ? e.ts : when.toLocaleString();
+    return `<div class="h-row">${statusTag(e.verdict)} <span>${fmt}</span> <span>· ${formatSec(e.listenedSec || 0)} escuchados</span> <span>· ${e.attempt === 'first' ? 'primera' : 'revisión'}</span></div>`;
+  }).join('');
+
+  card.innerHTML = `
+    <div class="fc-header">
+      <h3 class="fc-name">${escapeHtml(c.name)}</h3>
+      ${statusTag(status)}
+    </div>
+    ${contactRows.length ? `<div class="fc-contact">${contactRows.join('')}</div>` : ''}
+    ${sections.join('')}
+    <div class="fc-player" data-player></div>
+    ${reviews.length ? `<div class="fc-section"><h4>Historial</h4><div class="fc-history">${historyRows}</div></div>` : ''}
+  `;
+
+  const playerEl = card.querySelector('[data-player]');
+  setupFinalistPlayer(playerEl, c);
+  return card;
+}
+
+function setupFinalistPlayer(container, composer) {
+  const samples = composer.samples || [];
+  if (!samples.length) {
+    container.innerHTML = '<div class="muted small">Sin audios.</div>';
+    return;
+  }
+
+  const tabs = samples.length > 1
+    ? `<div class="fc-sample-tabs">${samples.map((s, i) =>
+        `<button type="button" class="tab${i === 0 ? ' active' : ''}" data-i="${i}">Muestra ${i + 1}</button>`).join('')}</div>`
+    : '';
+
+  container.innerHTML = `
+    ${tabs}
+    <div class="fc-sample-note"></div>
+    <audio preload="metadata"></audio>
+    <div class="fc-player-row">
+      <button type="button" class="fc-play-btn" aria-label="Reproducir">
+        <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+      </button>
+      <div class="fc-progress" role="slider" aria-label="Posición del audio" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="fc-fill"></div>
+        <div class="fc-thumb"></div>
+      </div>
+    </div>
+    <div class="fc-time-row"><span class="t elapsed">0:00</span><span class="t total">--:--</span></div>
+    <div class="fc-controls">
+      <button type="button" class="seek-btn back">−10s</button>
+      <button type="button" class="seek-btn fwd">+10s</button>
+      <button type="button" class="btn ghost pdf-btn">Ver PDF</button>
+    </div>
+  `;
+
+  const audio    = container.querySelector('audio');
+  const note     = container.querySelector('.fc-sample-note');
+  const playBtn  = container.querySelector('.fc-play-btn');
+  const bar      = container.querySelector('.fc-progress');
+  const fill     = container.querySelector('.fc-fill');
+  const thumb    = container.querySelector('.fc-thumb');
+  const elapsed  = container.querySelector('.elapsed');
+  const total    = container.querySelector('.total');
+  const backBtn  = container.querySelector('.back');
+  const fwdBtn   = container.querySelector('.fwd');
+  const pdfBtn   = container.querySelector('.pdf-btn');
+  const tabsBtns = container.querySelectorAll('.fc-sample-tabs .tab');
+
+  let activeIdx = 0;
+  let blobUrl = null;
+  let loadToken = 0;
+
+  function setActiveTab(i) {
+    activeIdx = i;
+    tabsBtns.forEach((b, k) => b.classList.toggle('active', k === i));
+    note.textContent = samples[i].note ? `Indicación del autor: ${samples[i].note}` : '';
+    pdfBtn.disabled = !samples[i].pdf_url && !(composer.extra_pdfs || []).length;
+  }
+
+  async function loadSample(i) {
+    audio.pause();
+    setActiveTab(i);
+    if (blobUrl) { URL.revokeObjectURL(blobUrl); blobUrl = null; }
+    audio.removeAttribute('src'); audio.load();
+    elapsed.textContent = '0:00';
+    total.textContent = '--:--';
+    fill.style.width = '0%';
+    thumb.style.left = '0%';
+    const url = samples[i].audio_url;
+    const myToken = ++loadToken;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('http ' + res.status);
+      const blob = await res.blob();
+      if (myToken !== loadToken) return;
+      blobUrl = URL.createObjectURL(blob);
+      audio.src = blobUrl;
+      audio.load();
+    } catch (e) {
+      if (myToken !== loadToken) return;
+      audio.src = url;
+      audio.load();
+    }
+  }
+
+  audio.addEventListener('loadedmetadata', () => {
+    const d = audio.duration;
+    total.textContent = isFinite(d) && d > 0 ? formatSec(d) : '--:--';
+  });
+  audio.addEventListener('durationchange', () => {
+    const d = audio.duration;
+    total.textContent = isFinite(d) && d > 0 ? formatSec(d) : '--:--';
+  });
+  audio.addEventListener('timeupdate', () => {
+    const d = audio.duration, t = audio.currentTime || 0;
+    elapsed.textContent = formatSec(t);
+    const ratio = (isFinite(d) && d > 0) ? Math.min(1, Math.max(0, t / d)) : 0;
+    const pct = (ratio * 100).toFixed(2) + '%';
+    fill.style.width = pct;
+    thumb.style.left = pct;
+    bar.setAttribute('aria-valuenow', String(Math.round(ratio * 100)));
+  });
+  audio.addEventListener('play', () => {
+    playBtn.classList.add('playing');
+    playBtn.setAttribute('aria-label', 'Pausar');
+    document.querySelectorAll('audio').forEach(a => { if (a !== audio && !a.paused) a.pause(); });
+  });
+  audio.addEventListener('pause', () => {
+    playBtn.classList.remove('playing');
+    playBtn.setAttribute('aria-label', 'Reproducir');
+  });
+  audio.addEventListener('ended', () => {
+    playBtn.classList.remove('playing');
+    playBtn.setAttribute('aria-label', 'Reproducir');
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (audio.paused) audio.play().catch(err => console.warn('play() bloqueado:', err));
+    else audio.pause();
+  });
+  backBtn.addEventListener('click', () => {
+    if (isFinite(audio.duration)) audio.currentTime = Math.max(0, audio.currentTime - 10);
+  });
+  fwdBtn.addEventListener('click', () => {
+    if (isFinite(audio.duration)) audio.currentTime = Math.min(audio.duration, audio.currentTime + 10);
+  });
+  pdfBtn.addEventListener('click', () => {
+    const s = samples[activeIdx];
+    const pdfs = (s.pdf_url ? [s.pdf_url] : []).concat(composer.extra_pdfs || []);
+    if (!pdfs.length) { alert('Sin PDF para esta muestra.'); return; }
+    pdfs.forEach(u => window.open(u, '_blank', 'noopener'));
+  });
+
+  tabsBtns.forEach(b => b.addEventListener('click', () => loadSample(Number(b.dataset.i))));
+
+  // Scrubber
+  let dragging = false, wasPlaying = false;
+  function ratioFromEvent(e) {
+    const rect = bar.getBoundingClientRect();
+    const cx = e.clientX != null ? e.clientX : (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+    return Math.min(1, Math.max(0, (cx - rect.left) / rect.width));
+  }
+  function seekTo(r) {
+    if (!isFinite(audio.duration) || audio.duration <= 0) return;
+    audio.currentTime = r * audio.duration;
+  }
+  bar.addEventListener('pointerdown', e => {
+    if (!isFinite(audio.duration) || audio.duration <= 0) return;
+    dragging = true;
+    wasPlaying = !audio.paused;
+    if (wasPlaying) audio.pause();
+    bar.setPointerCapture(e.pointerId);
+    seekTo(ratioFromEvent(e));
+    e.preventDefault();
+  });
+  bar.addEventListener('pointermove', e => { if (dragging) seekTo(ratioFromEvent(e)); });
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    if (wasPlaying) audio.play().catch(() => {});
+  }
+  bar.addEventListener('pointerup', endDrag);
+  bar.addEventListener('pointercancel', endDrag);
+
+  setActiveTab(0);
+  // Lazy: only fetch when user first clicks play (saves bandwidth on big lists)
+  let loaded = false;
+  const lazyLoad = () => { if (loaded) return; loaded = true; loadSample(0); };
+  playBtn.addEventListener('click', lazyLoad, { once: true });
+  bar.addEventListener('pointerdown', lazyLoad, { once: true });
+
+  // If user switches sample before first play, load that sample (and mark loaded so first lazyLoad above won't run again)
+  tabsBtns.forEach(b => b.addEventListener('click', () => { loaded = true; }, { once: true }));
+}
+
 /* ---------- Results ---------- */
 
 function renderResults() {
@@ -893,13 +1176,17 @@ function download(filename, content, mime) {
 /* ---------- Navigation ---------- */
 
 function showScreen(name) {
-  for (const id of ['home', 'review', 'results']) {
+  for (const id of ['home', 'review', 'results', 'finalists']) {
     document.getElementById('screen-' + id).classList.toggle('hidden', id !== name);
   }
   if (name === 'home') refreshHome();
   if (name === 'results') renderResults();
+  if (name === 'finalists') renderFinalists();
   if (name !== 'review') {
     els.audio.pause();
     accumulateListen();
+  }
+  if (name !== 'finalists') {
+    document.querySelectorAll('#finalists-list audio').forEach(a => a.pause());
   }
 }

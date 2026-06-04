@@ -12,6 +12,7 @@
     <div class="brand">ADAR · Composer in Residence</div>
     <nav class="nav">
       <button class="nav-btn" data-go="home">Inicio</button>
+      <button class="nav-btn" data-go="finalists">Finalistas</button>
       <button class="nav-btn" data-go="results">Resultados</button>
     </nav>
   </header>
@@ -132,6 +133,23 @@
           <p>No quedan candidatos en este modo.</p>
           <button class="btn" data-go="home">Volver</button>
         </div>
+      </div>
+    </section>
+
+    <!-- FINALISTS -->
+    <section class="screen hidden" id="screen-finalists">
+      <div class="card">
+        <h1>Finalistas</h1>
+        <div class="row finalists-filters">
+          <button class="btn yes" data-fin-filter="yes">Sí</button>
+          <button class="btn maybe" data-fin-filter="maybe">Maybe</button>
+          <button class="btn" data-fin-filter="reviewed">Todos los revisados</button>
+        </div>
+        <div class="muted small" id="finalists-summary"></div>
+      </div>
+      <div id="finalists-list"></div>
+      <div class="card empty hidden" id="finalists-empty">
+        <p>No hay candidatos en este filtro todavía.</p>
       </div>
     </section>
 
